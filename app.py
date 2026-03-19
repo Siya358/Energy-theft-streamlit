@@ -2,11 +2,13 @@ import streamlit as st
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
+st.set_page_config(page_title="Energy Theft Detection", layout="centered")
 
 # Load model
 model = pickle.load(open("model.pkl", "rb"))
 
 st.title("⚡ Energy Theft Detection System")
+st.markdown("### ⚡ Smart Grid Monitoring System")
 
 st.write("Enter smart meter details:")
 
