@@ -16,9 +16,11 @@ variance = st.number_input("Variance")
 
 if st.button("Predict"):
     features = np.array([[avg, peak, off_peak, variance]])
+    
     prediction = model.predict(features)
+    prob = model.predict_proba(features)
 
     if prediction[0] == 1:
-        st.error("⚠ Theft Detected")
+        st.error(f"⚠ Theft Detected ({prob[0][1]*100:.2f}% confidence)")
     else:
-        st.success("✅ Normal Usage")
+        st.success(f"✅ Normal Usage ({prob[0][0]*100:.2f}% confidence)")
