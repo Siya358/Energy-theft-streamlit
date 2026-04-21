@@ -17,7 +17,7 @@ It analyzes smart meter data and predicts whether the usage is **normal or suspi
 
 ##  Machine Learning
 - Model Used: Random Forest Classifier
-- Accuracy: XX%  ← (replace with your actual accuracy)
+- Accuracy: 80% 
 
 ---
 
