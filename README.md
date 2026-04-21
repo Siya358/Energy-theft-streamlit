@@ -31,7 +31,8 @@ It analyzes smart meter data and predicts whether the usage is **normal or suspi
 ---
 
 ##  Screenshots
-<img width="1280" height="800" alt="Screenshot 2026-04-21 at 5 09 57 PM" src="https://github.com/user-attachments/assets/ee7772ab-b700-4220-b0a9-b7da52da0ef0" />
+<img width="2130" height="1186" alt="ETD image" src="https://github.com/user-attachments/assets/b91d752b-4389-4af3-9a4c-f87e02d17b67" />
+
 
 
 ---
