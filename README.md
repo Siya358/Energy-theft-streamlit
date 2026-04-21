@@ -1,4 +1,4 @@
-##⚡ Energy Theft Detection using Machine Learning
+## Energy Theft Detection using Machine Learning
 
 ##  Overview
 This project detects electricity theft in smart grids using machine learning.  
@@ -31,13 +31,10 @@ It analyzes smart meter data and predicts whether the usage is **normal or suspi
 ---
 
 ##  Screenshots
-(Add screenshot of your app here)
+<img width="1280" height="800" alt="Screenshot 2026-04-21 at 5 09 57 PM" src="https://github.com/user-attachments/assets/ee7772ab-b700-4220-b0a9-b7da52da0ef0" />
+
 
 ---
-
-##  Live Demo
-(Add your Streamlit app link here)
-
 ---
 
 ##  Project Structure
@@ -52,7 +49,7 @@ energy_theft_streamlit/
 
 ---
 
-## ▶️ How to Run Locally
+##  How to Run Locally
 
 ```bash
 pip install -r requirements.txt
