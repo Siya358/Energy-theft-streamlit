@@ -196,19 +196,33 @@ if uploaded_file is not None:
 
     required_cols = ["avg", "peak", "off_peak", "variance"]
 
-if all(col in data.columns for col in required_cols):
-    predictions = model.predict(data[required_cols])
-    data["Prediction"] = predictions
-else:
-    st.error("CSV must contain columns: avg, peak, off_peak, variance")
-    
-    st.write("Results:", data)
+    # ✅ keep EVERYTHING inside this block
+    if model is None:
+        st.error("Model not loaded. Please check deployment.")
 
-    st.download_button(
-        "Download Results",
-        data.to_csv(index=False),
-        file_name="predictions.csv"
-    )           
+    elif all(col in data.columns for col in required_cols):
+        predictions = model.predict(data[required_cols])
+        data["Prediction"] = predictions
+
+        st.write("Results:", data)
+
+        st.download_button(
+            "Download Results",
+            data.to_csv(index=False),
+            file_name="predictions.csv"
+        )
+
+        total = len(data)
+        fraud = sum(data["Prediction"])
+
+        st.metric("Total Records", total)
+        st.metric("Fraud Cases", fraud)
+        st.metric("Fraud %", f"{(fraud/total)*100:.2f}%")
+
+    else:
+        st.error("CSV must contain columns: avg, peak, off_peak, variance")
+
+         
 # Summary Metrics , what it does not
 if uploaded_file is not None and "Prediction" in data.columns:
     total = len(data)
