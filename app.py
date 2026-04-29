@@ -155,7 +155,7 @@ if st.button("Predict Theft", key="predict_btn"):
         features = np.array([[avg, peak, off_peak, variance]])
         prediction = model.predict(features)
         prob = model.predict_proba(features)
-        //changed
+       
     if prediction[0] == 1:
         st.error(f"⚠ Theft Detected ({prob[0][1]*100:.2f}% confidence)")
 
