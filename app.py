@@ -192,7 +192,7 @@ if uploaded_file is not None:
     import pandas as pd
     data = pd.read_csv(uploaded_file)
 
-   st.dataframe(data.head())
+    st.dataframe(data.head())
 
    required_cols = ["avg", "peak", "off_peak", "variance"]
 
