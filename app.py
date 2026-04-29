@@ -194,7 +194,7 @@ if uploaded_file is not None:
 
     st.dataframe(data.head())
 
-   required_cols = ["avg", "peak", "off_peak", "variance"]
+    required_cols = ["avg", "peak", "off_peak", "variance"]
 
 if all(col in data.columns for col in required_cols):
     predictions = model.predict(data[required_cols])
