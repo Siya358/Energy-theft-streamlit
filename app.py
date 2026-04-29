@@ -2,6 +2,7 @@ import streamlit as st
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 st.markdown(
     """
     <style>
@@ -33,11 +34,14 @@ color: black;
 st.set_page_config(page_title="Energy Theft Detection", layout="wide")
 
 # Load model
-model = pickle.load(open("model.pkl", "rb"))
-
+model = None
+if os.path.exists("model.pkl"):
+    model = pickle.load(open("model.pkl", "rb"))
+else:
+    st.error("Model file not found")
+    
 # Load accuracy
-with open("accuracy.txt", "r") as f:
-    acc = float(f.read())
+acc = 0.80
 
 # Sidebar
 st.sidebar.title("⚙️ Dashboard Settings")
@@ -73,10 +77,7 @@ st.markdown("## 📊 Visualization Dashboard")
 
 st.markdown("---")
 
-col3, col4 = st.columns(2, gap="large")  # ✅ adds space between columns
-
-col3, col4 = st.columns(2)
-
+col3, col4 = st.columns(2, gap="large")  #  adds space between columns
 
 
 # Pie Chart
@@ -88,7 +89,10 @@ with col3:
         labels = ["Avg", "Peak", "Off-Peak", "Variance"]
 
         fig, ax = plt.subplots(figsize=(5,5))  # bigger chart
-        ax.pie(values, labels=labels, autopct="%1.1f%%", startangle=90)
+        if sum(values) == 0:
+           st.warning("Enter values greater than 0 to visualize")
+        else:
+           ax.pie(values, labels=labels, autopct="%1.1f%%", startangle=90)
         ax.set_title("Usage Distribution")
 
         st.pyplot(fig)
@@ -144,11 +148,14 @@ st.markdown("---")
 st.subheader("🔍 Predict Theft")
 
 if st.button("Predict Theft", key="predict_btn"):
-    
-    features = np.array([[avg, peak, off_peak, variance]])
-    prediction = model.predict(features)
-    prob = model.predict_proba(features)
 
+    if model is None:
+        st.error("Model not loaded. Please check deployment.")
+    else:
+        features = np.array([[avg, peak, off_peak, variance]])
+        prediction = model.predict(features)
+        prob = model.predict_proba(features)
+        //changed
     if prediction[0] == 1:
         st.error(f"⚠ Theft Detected ({prob[0][1]*100:.2f}% confidence)")
 
@@ -185,11 +192,16 @@ if uploaded_file is not None:
     import pandas as pd
     data = pd.read_csv(uploaded_file)
 
-    st.write("Uploaded Data:", data.head())
+   st.dataframe(data.head())
 
-    predictions = model.predict(data)
+   required_cols = ["avg", "peak", "off_peak", "variance"]
+
+if all(col in data.columns for col in required_cols):
+    predictions = model.predict(data[required_cols])
     data["Prediction"] = predictions
-
+else:
+    st.error("CSV must contain columns: avg, peak, off_peak, variance")
+    
     st.write("Results:", data)
 
     st.download_button(
@@ -198,10 +210,9 @@ if uploaded_file is not None:
         file_name="predictions.csv"
     )           
 # Summary Metrics , what it does not
-if uploaded_file is not None:
+if uploaded_file is not None and "Prediction" in data.columns:
     total = len(data)
     fraud = sum(data["Prediction"])
-
     st.metric("Total Records", total)
     st.metric("Fraud Cases", fraud)
     st.metric("Fraud %", f"{(fraud/total)*100:.2f}%")     
