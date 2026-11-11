@@ -1,74 +1,200 @@
+import base64
 import hashlib
 import json
 import os
 import pickle
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-
-# ==========================================
-# 1. PAGE CONFIGURATION
-# ==========================================
+APP_NAME = "Energy Theft Detection System"
+APP_SUBTITLE = "Smart Grid Monitoring & Machine Learning-Based Detection"
 
 st.set_page_config(
-    page_title="Energy Theft Detection",
+    page_title=APP_NAME,
     page_icon="⚡",
     layout="wide",
 )
 
+BASE_DIR = Path(__file__).resolve().parent
 
-# ==========================================
-# 2. CUSTOM CSS
-# ==========================================
+HERO_IMAGE_CANDIDATES = [
+    "energy_theft_hero.jpg",
+    "Energy theft.jpg",
+    "Energy_theft.jpg",
+]
 
-st.markdown("""
+
+@st.cache_data(show_spinner=False)
+def load_hero_image():
+    """Return the hero image as a Base64 data URI, or None if unavailable.
+
+    Embedding the image in the CSS avoids relative-path problems on
+    Streamlit Community Cloud.
+    """
+    for file_name in HERO_IMAGE_CANDIDATES:
+        image_path = BASE_DIR / file_name
+        try:
+            if image_path.is_file():
+                encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+                return f"data:image/jpeg;base64,{encoded}"
+        except OSError:
+            continue
+    return None
+
+
+HERO_IMAGE = load_hero_image()
+HERO_IMAGE_LAYER = f'url("{HERO_IMAGE}")' if HERO_IMAGE else "none"
+
+APP_CSS = """
 <style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 
-/* Main application background */
-.stApp {
-    background: linear-gradient(
-        135deg,
-        #071426 0%,
-        #102747 55%,
-        #163b63 100%
-    );
-    color: #F8FAFC;
+:root {
+    --navy-900: #06101f;
+    --navy-800: #0a1d35;
+    --navy-700: #102b4b;
+    --cyan: #22d3ee;
+    --blue: #2563eb;
+    --green: #22c55e;
+    --red: #ef4444;
+    --text: #f8fafc;
+    --text-muted: #b6c8de;
+    --glass: rgba(255, 255, 255, 0.07);
+    --glass-border: rgba(148, 197, 255, 0.18);
 }
 
-/* Main content area */
+.stApp {
+    background-color: var(--navy-900);
+    background-image:
+        linear-gradient(rgba(56, 189, 248, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(56, 189, 248, 0.025) 1px, transparent 1px),
+        radial-gradient(circle at 82% 8%, rgba(6, 182, 212, 0.16), transparent 28%),
+        radial-gradient(circle at 8% 90%, rgba(37, 99, 235, 0.14), transparent 30%),
+        linear-gradient(135deg, #06101f 0%, #0a1d35 52%, #102b4b 100%);
+    background-size: 42px 42px, 42px 42px, auto, auto, auto;
+    background-attachment: fixed;
+    color: var(--text);
+}
+
+.stApp,
+.stApp p,
+.stApp label,
+.stApp li,
+.stApp h1,
+.stApp h2,
+.stApp h3,
+.stApp h4,
+.stApp button,
+.stApp input,
+.stApp [data-testid="stMetricValue"],
+.stApp [data-testid="stMetricLabel"] {
+    font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+.stApp p,
+.stApp li,
+.stApp label,
+.stApp [data-testid="stWidgetLabel"] p {
+    color: var(--text);
+}
+
+.stApp [data-testid="stCaptionContainer"],
+.stApp [data-testid="stCaptionContainer"] p {
+    color: var(--text-muted);
+}
+
+[data-testid="stHeader"] {
+    background: transparent;
+}
+
 .block-container {
     padding-top: 2rem;
-    padding-bottom: 2rem;
+    padding-bottom: 3rem;
+    max-width: 1200px;
 }
 
-/* Sidebar */
-[data-testid="stSidebar"] {
-    background: linear-gradient(
-        180deg,
-        #09182B,
-        #102A48
-    );
-}
-
-/* Metric cards */
-[data-testid="stMetric"] {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    padding: 18px;
-    border-radius: 14px;
-}
-
-/* Headings */
-h1, h2, h3 {
+h1, h2, h3, h4 {
     color: #FFFFFF !important;
+    letter-spacing: -0.01em;
 }
 
-/* Input fields */
+h2, h3 {
+    margin-top: 0.4rem;
+}
+
+hr {
+    border-color: rgba(148, 197, 255, 0.16) !important;
+    margin: 1.6rem 0 !important;
+}
+
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #09182B, #102A48);
+    border-right: 1px solid rgba(34, 211, 238, 0.14);
+}
+
+[data-testid="stSidebar"] hr {
+    margin: 1rem 0 !important;
+}
+
+.sidebar-brand {
+    font-size: 1.1rem;
+    font-weight: 700;
+    line-height: 1.3;
+    color: #FFFFFF;
+    padding-bottom: 0.25rem;
+}
+
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.status-dot.ok {
+    background: var(--green);
+}
+
+.status-dot.bad {
+    background: var(--red);
+}
+
+[data-testid="stMetric"] {
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    padding: 18px;
+    border-radius: 16px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+[data-testid="stMetricLabel"] p {
+    color: var(--text-muted) !important;
+}
+
+[data-testid="stMetricValue"] {
+    color: #FFFFFF;
+    font-weight: 600;
+}
+
 .stNumberInput input,
 .stTextInput input {
     background-color: #F8FAFC;
@@ -76,17 +202,37 @@ h1, h2, h3 {
     border-radius: 8px;
 }
 
+.stNumberInput button {
+    color: #102033;
+}
 
-/* Plotly chart containers */
+[data-testid="stPlotlyChart"],
+[data-testid="stImage"] img,
+[data-testid="stDataFrame"] {
+    border-radius: 14px;
+}
+
 [data-testid="stPlotlyChart"] {
     background: rgba(255, 255, 255, 0.035);
     border: 1px solid rgba(148, 163, 184, 0.16);
-    border-radius: 14px;
     padding: 8px;
 }
 
-/* Buttons */
-.stButton > button {
+[data-testid="stImage"] img {
+    border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+[data-testid="stDataFrame"] {
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    overflow: hidden;
+}
+
+[data-testid="stAlert"] {
+    border-radius: 12px;
+}
+
+.stButton > button,
+.stDownloadButton > button {
     background: linear-gradient(90deg, #2563EB, #06B6D4);
     color: white;
     border: none;
@@ -95,17 +241,110 @@ h1, h2, h3 {
     font-weight: 600;
 }
 
-/* Buttons on hover */
-.stButton > button:hover {
+.stButton > button:hover,
+.stDownloadButton > button:hover {
     background: #0EA5E9;
     color: white;
     border: none;
 }
 
-</style>
-""", unsafe_allow_html=True)
+.stButton > button:focus-visible,
+.stDownloadButton > button:focus-visible {
+    outline: 2px solid var(--cyan);
+    outline-offset: 2px;
+}
 
-# These names must match the columns used by train_model.py.
+[data-testid="stFileUploader"] section {
+    background: var(--glass);
+    border: 1px dashed rgba(34, 211, 238, 0.45);
+    border-radius: 14px;
+}
+
+.energy-hero {
+    position: relative;
+    min-height: 260px;
+    margin-bottom: 1.5rem;
+    padding: 28px;
+    display: flex;
+    align-items: center;
+    border: 1px solid rgba(34, 211, 238, 0.5);
+    border-radius: 20px;
+    background-image:
+        linear-gradient(90deg, rgba(3, 14, 31, 0.92) 0%, rgba(3, 14, 31, 0.6) 55%, rgba(3, 14, 31, 0.3) 100%),
+        __HERO_IMAGE__,
+        linear-gradient(135deg, #06101f, #102b4b);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    overflow: hidden;
+}
+
+.energy-hero-panel {
+    max-width: 640px;
+    padding: 22px 26px;
+    border-radius: 16px;
+    background: rgba(6, 16, 31, 0.5);
+    border: 1px solid rgba(148, 197, 255, 0.2);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+.energy-hero-title {
+    margin: 0;
+    color: #FFFFFF;
+    font-size: clamp(1.7rem, 4.2vw, 2.7rem);
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+}
+
+.energy-hero-subtitle {
+    margin: 10px 0 0 0;
+    color: var(--cyan);
+    font-size: clamp(0.95rem, 2vw, 1.15rem);
+    font-weight: 500;
+}
+
+.energy-hero-copy {
+    margin: 10px 0 0 0;
+    color: #d7eafe;
+    font-size: 1rem;
+    line-height: 1.55;
+}
+
+@media (max-width: 640px) {
+    .block-container {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .energy-hero {
+        min-height: 200px;
+        padding: 14px;
+        border-radius: 16px;
+        background-image:
+            linear-gradient(180deg, rgba(3, 14, 31, 0.85) 0%, rgba(3, 14, 31, 0.6) 100%),
+            __HERO_IMAGE__,
+            linear-gradient(135deg, #06101f, #102b4b);
+    }
+
+    .energy-hero-panel {
+        padding: 16px 18px;
+    }
+
+    .energy-hero-copy {
+        font-size: 0.92rem;
+    }
+}
+</style>
+"""
+
+st.markdown(
+    APP_CSS.replace("__HERO_IMAGE__", HERO_IMAGE_LAYER),
+    unsafe_allow_html=True,
+)
+
 FEATURES = [
     "avg_usage",
     "peak_usage",
@@ -129,10 +368,6 @@ except Exception as error:
     st.error(f"Unable to load model: {error}")
 
 
-# ==========================================
-# 5. LOAD MODEL METRICS
-# ==========================================
-
 metrics = None
 
 try:
@@ -143,10 +378,6 @@ try:
 except Exception as error:
     st.warning(f"Unable to load model metrics: {error}")
 
-
-# ==========================================
-# 6. DATABASE FUNCTIONS
-# ==========================================
 
 def init_db():
     """Create the prediction history table if it does not exist."""
@@ -253,10 +484,6 @@ def get_history():
 init_db()
 
 
-# ==========================================
-# 7. HELPER FUNCTIONS
-# ==========================================
-
 def get_theft_score(features):
     """Return the model probability for class 1 (theft)."""
     if not hasattr(model, "predict_proba"):
@@ -294,11 +521,10 @@ def generate_alert(risk_score, avg, peak, off_peak, variance):
     return message, reasons
 
 
-# ==========================================
-# 8. SIDEBAR
-# ==========================================
-
-st.sidebar.title("⚙️ Dashboard Settings")
+st.sidebar.markdown(
+    f'<div class="sidebar-brand">⚡ {APP_NAME}</div>',
+    unsafe_allow_html=True,
+)
 
 st.sidebar.markdown(
     "Monitor electricity usage and detect "
@@ -306,31 +532,35 @@ st.sidebar.markdown(
 )
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("Dashboard Settings")
 st.sidebar.write("Model: Random Forest")
-st.sidebar.write(
-    "Status: Active" if model is not None else "Status: Model unavailable"
+
+if model is not None:
+    status_html = (
+        '<span class="status-pill">'
+        '<span class="status-dot ok"></span>Status: Active</span>'
+    )
+else:
+    status_html = (
+        '<span class="status-pill">'
+        '<span class="status-dot bad"></span>Status: Model unavailable</span>'
+    )
+
+st.sidebar.markdown(status_html, unsafe_allow_html=True)
+
+
+st.markdown(
+    '<div class="energy-hero"><div class="energy-hero-panel">'
+    f'<div class="energy-hero-title">{APP_NAME}</div>'
+    f'<div class="energy-hero-subtitle">{APP_SUBTITLE.replace("&", "&amp;")}</div>'
+    '<p class="energy-hero-copy">An ML-powered application for identifying '
+    "potentially suspicious electricity consumption.</p>"
+    "</div></div>",
+    unsafe_allow_html=True,
 )
 
 
-# ==========================================
-# 9. MAIN TITLE
-# ==========================================
-
-st.title("⚡ Energy Theft Detection Dashboard")
-st.markdown("### Smart Grid Monitoring System")
-
-st.write(
-    "An ML-powered application for identifying "
-    "potentially suspicious electricity consumption."
-)
-
-
-# ==========================================
-# 10. MODEL PERFORMANCE
-# ==========================================
-
-st.markdown("---")
-st.subheader("📊 Model Performance")
+st.subheader("Model Performance")
 
 if metrics is not None:
     col1, col2, col3, col4 = st.columns(4)
@@ -343,10 +573,6 @@ else:
     st.info("Train the model to generate evaluation metrics.")
 
 
-# ==========================================
-# 11. CONFUSION MATRIX
-# ==========================================
-
 st.markdown("---")
 st.subheader("Model Evaluation - Confusion Matrix")
 
@@ -354,13 +580,9 @@ if os.path.exists("confusion_matrix.png"):
     st.image(
         "confusion_matrix.png",
         caption="Random Forest Confusion Matrix",
-        use_container_width=True,
+        width="stretch",
     )
 
-
-# ==========================================
-# 11A. RANDOM FOREST FEATURE IMPORTANCE
-# ==========================================
 
 st.markdown("---")
 st.subheader("Which features influence the model?")
@@ -390,7 +612,7 @@ if model is not None and hasattr(model, "feature_importances_"):
         yaxis_title="",
         margin=dict(l=10, r=10, t=55, b=10),
     )
-    st.plotly_chart(fig_importance, use_container_width=True)
+    st.plotly_chart(fig_importance, width="stretch")
     st.caption(
         "Feature importance describes how the fitted Random Forest used "
         "features across its trees. It does not show causation."
@@ -399,12 +621,8 @@ else:
     st.info("Feature importance is unavailable for the currently loaded model.")
 
 
-# ==========================================
-# 12. SMART METER INPUT
-# ==========================================
-
 st.markdown("---")
-st.subheader("📥 Enter Smart Meter Data")
+st.subheader("Enter Smart Meter Data")
 
 col1, col2 = st.columns(2)
 
@@ -435,23 +653,31 @@ with col2:
     )
 
 
-# ==========================================
-# 13. INPUT VISUALIZATION
-# ==========================================
-
 st.markdown("---")
 st.subheader("Consumption Feature Comparison")
 
 if st.button("Show Usage Visualization"):
+    chart_background = "#0b1f38"
+
     fig, ax = plt.subplots(figsize=(8, 4))
+    fig.patch.set_facecolor(chart_background)
+    ax.set_facecolor(chart_background)
 
     ax.bar(
         ["Average", "Peak", "Off-Peak"],
         [avg, peak, off_peak],
+        color=["#2563EB", "#06B6D4", "#38BDF8"],
+        width=0.55,
     )
 
-    ax.set_ylabel("Usage")
-    ax.set_title("Smart Meter Consumption Values")
+    ax.set_ylabel("Usage", color="#F8FAFC")
+    ax.set_title("Smart Meter Consumption Values", color="#F8FAFC")
+    ax.tick_params(colors="#D7EAFE")
+    ax.grid(axis="y", color="#94A3B8", alpha=0.18)
+    ax.set_axisbelow(True)
+
+    for spine in ax.spines.values():
+        spine.set_color("#334155")
 
     st.pyplot(fig)
     plt.close(fig)
@@ -459,12 +685,8 @@ if st.button("Show Usage Visualization"):
     st.metric("Recorded Variance", f"{variance:.2f}")
 
 
-# ==========================================
-# 14. INDIVIDUAL PREDICTION
-# ==========================================
-
 st.markdown("---")
-st.subheader("🔍 Predict Electricity Theft")
+st.subheader("Predict Electricity Theft")
 
 if st.button("Predict Theft", key="predict_btn"):
     if model is None:
@@ -521,8 +743,6 @@ if st.button("Predict Theft", key="predict_btn"):
             "not be treated as confirmed theft."
         )
 
-
-        # Optional SHAP explanation for this individual prediction.
         st.markdown("#### Why did the model make this prediction?")
         try:
             import shap
@@ -530,7 +750,6 @@ if st.button("Predict Theft", key="predict_btn"):
             explainer = shap.TreeExplainer(model)
             shap_result = explainer.shap_values(features)
 
-            # SHAP versions return binary-class values in different shapes.
             if isinstance(shap_result, list):
                 class_index = list(model.classes_).index(1)
                 class_shap = shap_result[class_index][0]
@@ -569,7 +788,7 @@ if st.button("Predict Theft", key="predict_btn"):
                 yaxis_title="",
                 margin=dict(l=10, r=10, t=55, b=10),
             )
-            st.plotly_chart(fig_shap, use_container_width=True)
+            st.plotly_chart(fig_shap, width="stretch")
             st.caption(
                 "Positive SHAP values push the model output toward the theft "
                 "class; negative values push it away. This explains model "
@@ -584,12 +803,8 @@ if st.button("Predict Theft", key="predict_btn"):
             st.warning(f"SHAP explanation could not be generated: {shap_error}")
 
 
-# ==========================================
-# 15. CSV BULK PREDICTION
-# ==========================================
-
 st.markdown("---")
-st.subheader("📂 Bulk Prediction Using CSV")
+st.subheader("Bulk Prediction Using CSV")
 
 uploaded_file = st.file_uploader(
     "Upload Smart Meter CSV",
@@ -601,7 +816,7 @@ if uploaded_file is not None:
         data = pd.read_csv(uploaded_file)
 
         st.write("Uploaded Data Preview")
-        st.dataframe(data.head(), use_container_width=True)
+        st.dataframe(data.head(), width="stretch")
 
         if model is None:
             st.error("Model is unavailable. Train the model first.")
@@ -645,7 +860,7 @@ if uploaded_file is not None:
                     data["Theft Score (%)"] = theft_scores
 
                     st.subheader("Prediction Results")
-                    st.dataframe(data, use_container_width=True)
+                    st.dataframe(data, width="stretch")
 
                     st.markdown("#### 🟢 Normal readings vs 🔴 suspected theft")
                     scatter_df = data.copy()
@@ -683,14 +898,12 @@ if uploaded_file is not None:
                         legend_title_text="Model prediction",
                         margin=dict(l=10, r=10, t=55, b=10),
                     )
-                    st.plotly_chart(fig_scatter, use_container_width=True)
+                    st.plotly_chart(fig_scatter, width="stretch")
                     st.caption(
                         "Each dot represents one uploaded meter record. Colours show "
                         "the model's predicted class, not a confirmed theft event."
                     )
 
-
-                    # Save each uploaded file only once per Streamlit session.
                     file_signature = hashlib.sha256(
                         uploaded_file.getvalue()
                     ).hexdigest()
@@ -732,17 +945,13 @@ if uploaded_file is not None:
         st.error(f"CSV processing error: {error}")
 
 
-# ==========================================
-# 16. PREDICTION HISTORY
-# ==========================================
-
 st.markdown("---")
-st.subheader("🗂️ Prediction History")
+st.subheader("Prediction History")
 
 history = get_history()
 
 if not history.empty:
-    st.dataframe(history, use_container_width=True)
+    st.dataframe(history, width="stretch")
 
     st.download_button(
         "Download Prediction History",
@@ -754,12 +963,8 @@ else:
     st.info("No prediction history available yet. Make your first prediction!")
 
 
-# ==========================================
-# 17. FOOTER
-# ==========================================
-
 st.markdown("---")
 st.caption(
-    "Energy Theft Detection System | "
+    f"{APP_NAME} | "
     "Python | Machine Learning | Streamlit"
 )
