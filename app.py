@@ -1,16 +1,16 @@
+
 import base64
 import hashlib
 import json
-import os
 import pickle
-import sqlite3
-from datetime import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
+
 
 APP_NAME = "Energy Theft Detection System"
 APP_SUBTITLE = "Smart Grid Monitoring & Machine Learning-Based Detection"
@@ -23,6 +23,23 @@ st.set_page_config(
 
 BASE_DIR = Path(__file__).resolve().parent
 
+try:
+    API_URL = st.secrets.get(
+        "API_URL",
+        "http://127.0.0.1:8001"
+    ).rstrip("/")
+except Exception:
+    API_URL = "http://127.0.0.1:8001"
+
+FEATURES = [
+    "avg_usage",
+    "peak_usage",
+    "off_peak_usage",
+    "variance",
+]
+
+MAX_BATCH_RECORDS = 10000
+
 HERO_IMAGE_CANDIDATES = [
     "energy_theft_hero.jpg",
     "Energy theft.jpg",
@@ -32,24 +49,31 @@ HERO_IMAGE_CANDIDATES = [
 
 @st.cache_data(show_spinner=False)
 def load_hero_image():
-    """Return the hero image as a Base64 data URI, or None if unavailable.
-
-    Embedding the image in the CSS avoids relative-path problems on
-    Streamlit Community Cloud.
-    """
     for file_name in HERO_IMAGE_CANDIDATES:
         image_path = BASE_DIR / file_name
+
         try:
             if image_path.is_file():
-                encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+                encoded = base64.b64encode(
+                    image_path.read_bytes()
+                ).decode("ascii")
+
                 return f"data:image/jpeg;base64,{encoded}"
+
         except OSError:
             continue
+
     return None
 
 
 HERO_IMAGE = load_hero_image()
-HERO_IMAGE_LAYER = f'url("{HERO_IMAGE}")' if HERO_IMAGE else "none"
+
+HERO_IMAGE_LAYER = (
+    f'url("{HERO_IMAGE}")'
+    if HERO_IMAGE
+    else "none"
+)
+
 
 APP_CSS = """
 <style>
@@ -345,158 +369,95 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-FEATURES = [
-    "avg_usage",
-    "peak_usage",
-    "off_peak_usage",
-    "variance",
-]
 
-DB_PATH = "predictions.db"
-
+MODEL_PATH = BASE_DIR / "model.pkl"
+METRICS_PATH = BASE_DIR / "model_metrics.json"
+CONFUSION_MATRIX_PATH = BASE_DIR / "confusion_matrix.png"
 
 model = None
 
 try:
-    if os.path.exists("model.pkl"):
-        with open("model.pkl", "rb") as model_file:
+    if MODEL_PATH.is_file():
+        with open(MODEL_PATH, "rb") as model_file:
             model = pickle.load(model_file)
     else:
-        st.error("Model file not found. Run train_model.py first.")
+        st.warning(
+            "Local model.pkl was not found. "
+            "Predictions can still work if the FastAPI backend has the model."
+        )
 
 except Exception as error:
-    st.error(f"Unable to load model: {error}")
+    st.warning(f"Unable to load local model: {error}")
 
 
 metrics = None
 
 try:
-    if os.path.exists("model_metrics.json"):
-        with open("model_metrics.json", "r", encoding="utf-8") as metrics_file:
+    if METRICS_PATH.is_file():
+        with open(METRICS_PATH, "r", encoding="utf-8") as metrics_file:
             metrics = json.load(metrics_file)
 
 except Exception as error:
     st.warning(f"Unable to load model metrics: {error}")
 
 
-def init_db():
-    """Create the prediction history table if it does not exist."""
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS prediction_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT,
-                avg REAL,
-                peak REAL,
-                off_peak REAL,
-                variance REAL,
-                prediction INTEGER,
-                theft_score REAL
-            )
-            """
+def check_backend_status():
+    try:
+        response = requests.get(
+            f"{API_URL}/health",
+            timeout=5,
         )
 
+        response.raise_for_status()
+        return True
 
-def save_prediction(avg, peak, off_peak, variance, prediction, theft_score):
-    """Save one individual prediction to SQLite."""
-    timestamp = datetime.now().isoformat(timespec="seconds")
+    except requests.RequestException:
+        return False
 
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            """
-            INSERT INTO prediction_history (
-                timestamp,
-                avg,
-                peak,
-                off_peak,
-                variance,
-                prediction,
-                theft_score
+
+def show_api_error(error, action_name="API request"):
+    if isinstance(error, requests.HTTPError):
+        try:
+            detail = error.response.json().get(
+                "detail",
+                error.response.text,
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                timestamp,
-                avg,
-                peak,
-                off_peak,
-                variance,
-                prediction,
-                theft_score,
-            ),
+        except Exception:
+            detail = str(error)
+
+        st.error(f"{action_name} failed: {detail}")
+
+    else:
+        st.error(
+            f"{action_name} failed. "
+            f"Please check whether FastAPI is running at {API_URL}. "
+            f"Details: {error}"
         )
-
-
-def save_batch_predictions(data):
-    """Save CSV prediction results to SQLite."""
-    timestamp = datetime.now().isoformat(timespec="seconds")
-    rows = []
-
-    for _, row in data.iterrows():
-        rows.append(
-            (
-                timestamp,
-                float(row["avg_usage"]),
-                float(row["peak_usage"]),
-                float(row["off_peak_usage"]),
-                float(row["variance"]),
-                int(row["Prediction"]),
-                float(row["Theft Score (%)"]),
-            )
-        )
-
-    if rows:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.executemany(
-                """
-                INSERT INTO prediction_history (
-                    timestamp,
-                    avg,
-                    peak,
-                    off_peak,
-                    variance,
-                    prediction,
-                    theft_score
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
 
 
 def get_history():
-    """Return the latest 100 prediction records."""
-    with sqlite3.connect(DB_PATH) as conn:
-        history = pd.read_sql_query(
-            """
-            SELECT *
-            FROM prediction_history
-            ORDER BY id DESC
-            LIMIT 100
-            """,
-            conn,
+    try:
+        response = requests.get(
+            f"{API_URL}/history",
+            timeout=15,
         )
 
-    return history
+        response.raise_for_status()
 
+        history_records = response.json().get(
+            "history",
+            [],
+        )
 
-init_db()
+        return pd.DataFrame(history_records)
 
+    except requests.RequestException as error:
+        show_api_error(error, "Loading prediction history")
+        return pd.DataFrame()
 
-def get_theft_score(features):
-    """Return the model probability for class 1 (theft)."""
-    if not hasattr(model, "predict_proba"):
-        return 0.0
-
-    probabilities = model.predict_proba(features)[0]
-    classes = list(model.classes_)
-
-    if 1 not in classes:
-        return 0.0
-
-    theft_index = classes.index(1)
-    return float(probabilities[theft_index])
+    except (ValueError, KeyError) as error:
+        st.error(f"Invalid history response from backend: {error}")
+        return pd.DataFrame()
 
 
 def generate_alert(risk_score, avg, peak, off_peak, variance):
@@ -513,8 +474,10 @@ def generate_alert(risk_score, avg, peak, off_peak, variance):
 
     if risk_score > 70:
         message = "High estimated theft score"
+
     elif risk_score > 40:
         message = "Moderate estimated theft score"
+
     else:
         message = "Low estimated theft score"
 
@@ -533,29 +496,62 @@ st.sidebar.markdown(
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Dashboard Settings")
-st.sidebar.write("Model: Random Forest")
 
-if model is not None:
-    status_html = (
+st.sidebar.write("Model: Random Forest")
+st.sidebar.write("Backend: FastAPI")
+
+backend_active = check_backend_status()
+
+if backend_active:
+    backend_status_html = (
         '<span class="status-pill">'
-        '<span class="status-dot ok"></span>Status: Active</span>'
+        '<span class="status-dot ok"></span>'
+        'API: Connected'
+        '</span>'
     )
 else:
-    status_html = (
+    backend_status_html = (
         '<span class="status-pill">'
-        '<span class="status-dot bad"></span>Status: Model unavailable</span>'
+        '<span class="status-dot bad"></span>'
+        'API: Disconnected'
+        '</span>'
     )
 
-st.sidebar.markdown(status_html, unsafe_allow_html=True)
+st.sidebar.markdown(
+    backend_status_html,
+    unsafe_allow_html=True,
+)
+
+if model is not None:
+    model_status_html = (
+        '<span class="status-pill">'
+        '<span class="status-dot ok"></span>'
+        'Local model: Loaded'
+        '</span>'
+    )
+else:
+    model_status_html = (
+        '<span class="status-pill">'
+        '<span class="status-dot bad"></span>'
+        'Local model: Unavailable'
+        '</span>'
+    )
+
+st.sidebar.markdown(
+    model_status_html,
+    unsafe_allow_html=True,
+)
 
 
 st.markdown(
     '<div class="energy-hero"><div class="energy-hero-panel">'
     f'<div class="energy-hero-title">{APP_NAME}</div>'
-    f'<div class="energy-hero-subtitle">{APP_SUBTITLE.replace("&", "&amp;")}</div>'
+    f'<div class="energy-hero-subtitle">'
+    f'{APP_SUBTITLE.replace("&", "&amp;")}'
+    '</div>'
     '<p class="energy-hero-copy">An ML-powered application for identifying '
-    "potentially suspicious electricity consumption.</p>"
-    "</div></div>",
+    'potentially suspicious electricity consumption.</p>'
+    '</div></div>',
     unsafe_allow_html=True,
 )
 
@@ -565,10 +561,26 @@ st.subheader("Model Performance")
 if metrics is not None:
     col1, col2, col3, col4 = st.columns(4)
 
-    col1.metric("Accuracy", f"{metrics['accuracy'] * 100:.2f}%")
-    col2.metric("Precision", f"{metrics['precision'] * 100:.2f}%")
-    col3.metric("Recall", f"{metrics['recall'] * 100:.2f}%")
-    col4.metric("F1 Score", f"{metrics['f1_score'] * 100:.2f}%")
+    col1.metric(
+        "Accuracy",
+        f"{metrics['accuracy'] * 100:.2f}%",
+    )
+
+    col2.metric(
+        "Precision",
+        f"{metrics['precision'] * 100:.2f}%",
+    )
+
+    col3.metric(
+        "Recall",
+        f"{metrics['recall'] * 100:.2f}%",
+    )
+
+    col4.metric(
+        "F1 Score",
+        f"{metrics['f1_score'] * 100:.2f}%",
+    )
+
 else:
     st.info("Train the model to generate evaluation metrics.")
 
@@ -576,22 +588,28 @@ else:
 st.markdown("---")
 st.subheader("Model Evaluation - Confusion Matrix")
 
-if os.path.exists("confusion_matrix.png"):
+if CONFUSION_MATRIX_PATH.is_file():
     st.image(
-        "confusion_matrix.png",
+        str(CONFUSION_MATRIX_PATH),
         caption="Random Forest Confusion Matrix",
         width="stretch",
     )
+else:
+    st.info("Confusion matrix image was not found.")
 
 
 st.markdown("---")
 st.subheader("Which features influence the model?")
 
 if model is not None and hasattr(model, "feature_importances_"):
+
     importance_df = pd.DataFrame({
         "Feature": FEATURES,
-        "Importance": model.feature_importances_
-    }).sort_values("Importance", ascending=True)
+        "Importance": model.feature_importances_,
+    }).sort_values(
+        "Importance",
+        ascending=True,
+    )
 
     fig_importance = px.bar(
         importance_df,
@@ -599,9 +617,14 @@ if model is not None and hasattr(model, "feature_importances_"):
         y="Feature",
         orientation="h",
         color="Importance",
-        color_continuous_scale=["#2563EB", "#06B6D4", "#A78BFA"],
-        title="Random Forest Feature Importance"
+        color_continuous_scale=[
+            "#2563EB",
+            "#06B6D4",
+            "#A78BFA",
+        ],
+        title="Random Forest Feature Importance",
     )
+
     fig_importance.update_layout(
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -612,13 +635,21 @@ if model is not None and hasattr(model, "feature_importances_"):
         yaxis_title="",
         margin=dict(l=10, r=10, t=55, b=10),
     )
-    st.plotly_chart(fig_importance, width="stretch")
+
+    st.plotly_chart(
+        fig_importance,
+        width="stretch",
+    )
+
     st.caption(
         "Feature importance describes how the fitted Random Forest used "
         "features across its trees. It does not show causation."
     )
+
 else:
-    st.info("Feature importance is unavailable for the currently loaded model.")
+    st.info(
+        "Feature importance is unavailable for the currently loaded model."
+    )
 
 
 st.markdown("---")
@@ -660,20 +691,39 @@ if st.button("Show Usage Visualization"):
     chart_background = "#0b1f38"
 
     fig, ax = plt.subplots(figsize=(8, 4))
+
     fig.patch.set_facecolor(chart_background)
     ax.set_facecolor(chart_background)
 
     ax.bar(
         ["Average", "Peak", "Off-Peak"],
         [avg, peak, off_peak],
-        color=["#2563EB", "#06B6D4", "#38BDF8"],
+        color=[
+            "#2563EB",
+            "#06B6D4",
+            "#38BDF8",
+        ],
         width=0.55,
     )
 
-    ax.set_ylabel("Usage", color="#F8FAFC")
-    ax.set_title("Smart Meter Consumption Values", color="#F8FAFC")
+    ax.set_ylabel(
+        "Usage",
+        color="#F8FAFC",
+    )
+
+    ax.set_title(
+        "Smart Meter Consumption Values",
+        color="#F8FAFC",
+    )
+
     ax.tick_params(colors="#D7EAFE")
-    ax.grid(axis="y", color="#94A3B8", alpha=0.18)
+
+    ax.grid(
+        axis="y",
+        color="#94A3B8",
+        alpha=0.18,
+    )
+
     ax.set_axisbelow(True)
 
     for spine in ax.spines.values():
@@ -682,31 +732,41 @@ if st.button("Show Usage Visualization"):
     st.pyplot(fig)
     plt.close(fig)
 
-    st.metric("Recorded Variance", f"{variance:.2f}")
+    st.metric(
+        "Recorded Variance",
+        f"{variance:.2f}",
+    )
 
 
 st.markdown("---")
 st.subheader("Predict Electricity Theft")
 
 if st.button("Predict Theft", key="predict_btn"):
-    if model is None:
-        st.error("Model is unavailable. Train the model first.")
-    else:
+
+    payload = {
+        "avg_usage": avg,
+        "peak_usage": peak,
+        "off_peak_usage": off_peak,
+        "variance": variance,
+    }
+
+    try:
+        with st.spinner("Analyzing smart meter data..."):
+            response = requests.post(
+                f"{API_URL}/predict",
+                json=payload,
+                timeout=30,
+            )
+
+            response.raise_for_status()
+            result = response.json()
+
+        prediction = result["prediction"]
+        theft_score = float(result["theft_score"])
+
         features = pd.DataFrame(
             [[avg, peak, off_peak, variance]],
             columns=FEATURES,
-        )
-
-        prediction = int(model.predict(features)[0])
-        theft_score = get_theft_score(features)
-
-        save_prediction(
-            avg,
-            peak,
-            off_peak,
-            variance,
-            prediction,
-            theft_score * 100,
         )
 
         st.markdown("### Prediction Result")
@@ -718,11 +778,11 @@ if st.button("Predict Theft", key="predict_btn"):
 
         st.metric(
             "Estimated Theft Score",
-            f"{theft_score * 100:.2f}%",
+            f"{theft_score:.2f}%",
         )
 
         message, reasons = generate_alert(
-            theft_score * 100,
+            theft_score,
             avg,
             peak,
             off_peak,
@@ -733,10 +793,13 @@ if st.button("Predict Theft", key="predict_btn"):
 
         if reasons:
             st.write("Possible consumption indicators:")
+
             for reason in reasons:
                 st.write(f"- {reason}")
         else:
-            st.write("No predefined consumption indicators were triggered.")
+            st.write(
+                "No predefined consumption indicators were triggered."
+            )
 
         st.caption(
             "Predictions are model estimates and should "
@@ -744,63 +807,99 @@ if st.button("Predict Theft", key="predict_btn"):
         )
 
         st.markdown("#### Why did the model make this prediction?")
-        try:
-            import shap
 
-            explainer = shap.TreeExplainer(model)
-            shap_result = explainer.shap_values(features)
+        if model is not None:
+            try:
+                import shap
 
-            if isinstance(shap_result, list):
-                class_index = list(model.classes_).index(1)
-                class_shap = shap_result[class_index][0]
-            else:
-                shap_array = shap_result.values if hasattr(shap_result, "values") else shap_result
-                if len(shap_array.shape) == 3:
+                explainer = shap.TreeExplainer(model)
+                shap_result = explainer.shap_values(features)
+
+                if isinstance(shap_result, list):
                     class_index = list(model.classes_).index(1)
-                    class_shap = shap_array[0, :, class_index]
+                    class_shap = shap_result[class_index][0]
+
                 else:
-                    class_shap = shap_array[0]
+                    shap_array = (
+                        shap_result.values
+                        if hasattr(shap_result, "values")
+                        else shap_result
+                    )
 
-            explanation_df = pd.DataFrame({
-                "Feature": FEATURES,
-                "SHAP contribution": class_shap
-            })
-            explanation_df = explanation_df.sort_values(
-                "SHAP contribution", ascending=True
-            )
+                    if len(shap_array.shape) == 3:
+                        class_index = list(model.classes_).index(1)
+                        class_shap = shap_array[0, :, class_index]
+                    else:
+                        class_shap = shap_array[0]
 
-            fig_shap = px.bar(
-                explanation_df,
-                x="SHAP contribution",
-                y="Feature",
-                orientation="h",
-                color="SHAP contribution",
-                color_continuous_scale=["#3B82F6", "#64748B", "#EF4444"],
-                title="Feature contributions toward the theft class"
-            )
-            fig_shap.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#F8FAFC",
-                coloraxis_showscale=False,
-                xaxis_title="SHAP value (direction and magnitude)",
-                yaxis_title="",
-                margin=dict(l=10, r=10, t=55, b=10),
-            )
-            st.plotly_chart(fig_shap, width="stretch")
-            st.caption(
-                "Positive SHAP values push the model output toward the theft "
-                "class; negative values push it away. This explains model "
-                "behaviour, not the real-world cause of a meter reading."
-            )
-        except ImportError:
+                explanation_df = pd.DataFrame({
+                    "Feature": FEATURES,
+                    "SHAP contribution": class_shap,
+                })
+
+                explanation_df = explanation_df.sort_values(
+                    "SHAP contribution",
+                    ascending=True,
+                )
+
+                fig_shap = px.bar(
+                    explanation_df,
+                    x="SHAP contribution",
+                    y="Feature",
+                    orientation="h",
+                    color="SHAP contribution",
+                    color_continuous_scale=[
+                        "#3B82F6",
+                        "#64748B",
+                        "#EF4444",
+                    ],
+                    title="Feature contributions toward the theft class",
+                )
+
+                fig_shap.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="#F8FAFC",
+                    coloraxis_showscale=False,
+                    xaxis_title="SHAP value (direction and magnitude)",
+                    yaxis_title="",
+                    margin=dict(l=10, r=10, t=55, b=10),
+                )
+
+                st.plotly_chart(
+                    fig_shap,
+                    width="stretch",
+                )
+
+                st.caption(
+                    "Positive SHAP values push the model output toward the theft "
+                    "class; negative values push it away. This explains model "
+                    "behaviour, not the real-world cause of a meter reading."
+                )
+
+            except ImportError:
+                st.info(
+                    "Install SHAP to see per-prediction explanations: "
+                    "`pip install shap`"
+                )
+
+            except Exception as shap_error:
+                st.warning(
+                    f"SHAP explanation could not be generated: {shap_error}"
+                )
+
+        else:
             st.info(
-                "Install SHAP to see per-prediction explanations: "
-                "`pip install shap`"
+                "The backend returned the prediction, but the local model "
+                "is unavailable for SHAP explanations."
             )
-        except Exception as shap_error:
-            st.warning(f"SHAP explanation could not be generated: {shap_error}")
+
+    except requests.RequestException as error:
+        show_api_error(error, "Individual prediction")
+
+    except (ValueError, KeyError, TypeError) as error:
+        st.error(f"Invalid prediction response from backend: {error}")
 
 
 st.markdown("---")
@@ -812,16 +911,17 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
+
     try:
         data = pd.read_csv(uploaded_file)
 
         st.write("Uploaded Data Preview")
-        st.dataframe(data.head(), width="stretch")
+        st.dataframe(
+            data.head(),
+            width="stretch",
+        )
 
-        if model is None:
-            st.error("Model is unavailable. Train the model first.")
-
-        elif data.empty:
+        if data.empty:
             st.warning("Uploaded CSV is empty.")
 
         elif not all(col in data.columns for col in FEATURES):
@@ -832,39 +932,108 @@ if uploaded_file is not None:
 
         else:
             for col in FEATURES:
-                data[col] = pd.to_numeric(data[col], errors="coerce")
+                data[col] = pd.to_numeric(
+                    data[col],
+                    errors="coerce",
+                )
 
             if data[FEATURES].isna().any().any():
                 st.error(
                     "CSV contains missing or invalid feature values. "
                     "Please correct them and upload the file again."
                 )
+
+            elif (data[FEATURES] < 0).any().any():
+                st.error(
+                    "CSV contains negative feature values. "
+                    "All usage and variance values must be non-negative."
+                )
+
+            elif len(data) > MAX_BATCH_RECORDS:
+                st.error(
+                    f"CSV contains {len(data)} records. "
+                    f"The maximum supported batch size is "
+                    f"{MAX_BATCH_RECORDS} records."
+                )
+
             else:
-                predictions = model.predict(data[FEATURES])
-                probabilities = model.predict_proba(data[FEATURES])
+                file_signature = hashlib.sha256(
+                    uploaded_file.getvalue()
+                ).hexdigest()
 
-                model_classes = list(model.classes_)
+                if (
+                    st.session_state.get("csv_result_signature")
+                    != file_signature
+                ):
 
-                if 1 not in model_classes:
-                    st.error("The trained model does not contain theft class 1.")
+                    records = data[FEATURES].to_dict(
+                        orient="records",
+                    )
+
+                    with st.spinner("Processing bulk predictions..."):
+                        response = requests.post(
+                            f"{API_URL}/predict/batch",
+                            json={"records": records},
+                            timeout=120,
+                        )
+
+                        response.raise_for_status()
+                        result = response.json()
+
+                    results = result["results"]
+
+                    if len(results) != len(data):
+                        st.error(
+                            "The backend returned an unexpected number "
+                            "of prediction results."
+                        )
+
+                    else:
+                        data["Prediction"] = [
+                            item["prediction"]
+                            for item in results
+                        ]
+
+                        data["Prediction Label"] = [
+                            item["prediction_label"]
+                            for item in results
+                        ]
+
+                        data["Theft Score (%)"] = [
+                            item["theft_score"]
+                            for item in results
+                        ]
+
+                        st.session_state["csv_result_signature"] = (
+                            file_signature
+                        )
+
+                        st.session_state["csv_result_data"] = (
+                            data.copy()
+                        )
+
                 else:
-                    theft_index = model_classes.index(1)
-                    theft_scores = probabilities[:, theft_index] * 100
+                    data = st.session_state[
+                        "csv_result_data"
+                    ].copy()
 
-                    data["Prediction"] = predictions
-                    data["Prediction Label"] = [
-                        "Theft Detected" if prediction == 1
-                        else "Normal Usage"
-                        for prediction in predictions
-                    ]
-                    data["Theft Score (%)"] = theft_scores
+                if (
+                    "Prediction" in data.columns
+                    and "Theft Score (%)" in data.columns
+                ):
 
                     st.subheader("Prediction Results")
-                    st.dataframe(data, width="stretch")
 
-                    st.markdown("#### 🟢 Normal readings vs 🔴 suspected theft")
+                    st.dataframe(
+                        data,
+                        width="stretch",
+                    )
+
+                    st.markdown(
+                        "#### 🟢 Normal readings vs 🔴 suspected theft"
+                    )
+
                     scatter_df = data.copy()
-                    scatter_df["Prediction Label"] = scatter_df["Prediction Label"].astype(str)
 
                     fig_scatter = px.scatter(
                         scatter_df,
@@ -873,23 +1042,32 @@ if uploaded_file is not None:
                         color="Prediction Label",
                         color_discrete_map={
                             "Normal Usage": "#22C55E",
-                            "Theft Detected": "#EF4444"
+                            "Theft Detected": "#EF4444",
                         },
                         hover_data={
                             "off_peak_usage": True,
                             "variance": True,
                             "Theft Score (%)": ":.2f",
-                            "Prediction Label": True
+                            "Prediction Label": True,
                         },
                         title="Smart meter readings by model prediction",
                         labels={
                             "avg_usage": "Average usage",
-                            "peak_usage": "Peak usage"
-                        }
+                            "peak_usage": "Peak usage",
+                        },
                     )
+
                     fig_scatter.update_traces(
-                        marker=dict(size=11, opacity=0.82, line=dict(width=0.6, color="#E2E8F0"))
+                        marker=dict(
+                            size=11,
+                            opacity=0.82,
+                            line=dict(
+                                width=0.6,
+                                color="#E2E8F0",
+                            ),
+                        ),
                     )
+
                     fig_scatter.update_layout(
                         template="plotly_dark",
                         paper_bgcolor="rgba(0,0,0,0)",
@@ -898,35 +1076,47 @@ if uploaded_file is not None:
                         legend_title_text="Model prediction",
                         margin=dict(l=10, r=10, t=55, b=10),
                     )
-                    st.plotly_chart(fig_scatter, width="stretch")
-                    st.caption(
-                        "Each dot represents one uploaded meter record. Colours show "
-                        "the model's predicted class, not a confirmed theft event."
+
+                    st.plotly_chart(
+                        fig_scatter,
+                        width="stretch",
                     )
 
-                    file_signature = hashlib.sha256(
-                        uploaded_file.getvalue()
-                    ).hexdigest()
-
-                    if (
-                        st.session_state.get("saved_csv_signature")
-                        != file_signature
-                    ):
-                        save_batch_predictions(data)
-                        st.session_state["saved_csv_signature"] = file_signature
+                    st.caption(
+                        "Each dot represents one uploaded meter record. "
+                        "Colours show the model's predicted class, "
+                        "not a confirmed theft event."
+                    )
 
                     total = len(data)
-                    theft_cases = int((data["Prediction"] == 1).sum())
+
+                    theft_cases = int(
+                        (data["Prediction"] == 1).sum()
+                    )
+
                     normal_cases = total - theft_cases
 
                     col1, col2, col3 = st.columns(3)
 
-                    col1.metric("Total Records", total)
-                    col2.metric("Potential Theft Cases", theft_cases)
-                    col3.metric("Normal Cases", normal_cases)
+                    col1.metric(
+                        "Total Records",
+                        total,
+                    )
+
+                    col2.metric(
+                        "Potential Theft Cases",
+                        theft_cases,
+                    )
+
+                    col3.metric(
+                        "Normal Cases",
+                        normal_cases,
+                    )
 
                     theft_percentage = (
-                        (theft_cases / total) * 100 if total > 0 else 0
+                        (theft_cases / total) * 100
+                        if total > 0
+                        else 0
                     )
 
                     st.metric(
@@ -941,6 +1131,12 @@ if uploaded_file is not None:
                         mime="text/csv",
                     )
 
+    except requests.RequestException as error:
+        show_api_error(error, "CSV batch prediction")
+
+    except (ValueError, KeyError, TypeError) as error:
+        st.error(f"Invalid batch prediction response: {error}")
+
     except Exception as error:
         st.error(f"CSV processing error: {error}")
 
@@ -951,7 +1147,11 @@ st.subheader("Prediction History")
 history = get_history()
 
 if not history.empty:
-    st.dataframe(history, width="stretch")
+
+    st.dataframe(
+        history,
+        width="stretch",
+    )
 
     st.download_button(
         "Download Prediction History",
@@ -959,12 +1159,17 @@ if not history.empty:
         file_name="prediction_history.csv",
         mime="text/csv",
     )
+
 else:
-    st.info("No prediction history available yet. Make your first prediction!")
+    st.info(
+        "No prediction history available yet. "
+        "Make your first prediction!"
+    )
 
 
 st.markdown("---")
+
 st.caption(
     f"{APP_NAME} | "
-    "Python | Machine Learning | Streamlit"
+    "Python | Machine Learning | FastAPI | Streamlit"
 )
